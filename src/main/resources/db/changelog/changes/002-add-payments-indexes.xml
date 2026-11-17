@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd
+            http://www.liquibase.org/xml/ns/dbchangelog-ext
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd">
+    <changeSet id="002-add-payments-user-id-index" author="gava751">
+        <ext:createIndex collectionName="payments" keys="{ user_id: 1 }" options="{ name: 'idx_payments_user_id' }"/>
+    </changeSet>
+    <changeSet id="003-add-payments-order-id-index" author="gava751">
+        <ext:createIndex collectionName="payments" keys="{ order_id: 1 }" options="{ name: 'idx_payments_order_id' }"/>
+    </changeSet>
+    <changeSet id="004-add-payments-status-index" author="gava751">
+        <ext:createIndex collectionName="payments" keys="{ status: 1 }" options="{ name: 'idx_payments_status' }"/>
+    </changeSet>
+    <changeSet id="005-add-payments-user-id-timestamp-index" author="gava751">
+        <ext:createIndex collectionName="payments" keys="{ user_id: 1, timestamp: 1 }" options="{ name: 'idx_payments_user_id_timestamp' }"/>
+    </changeSet>
+    <changeSet id="006-add-payments-timestamp-index" author="gava751">
+        <ext:createIndex collectionName="payments" keys="{ timestamp: 1 }" options="{ name: 'idx_payments_timestamp' }"/>
+    </changeSet>
+</databaseChangeLog>

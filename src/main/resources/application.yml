@@ -1,0 +1,28 @@
+spring:
+  profiles:
+    default: local
+
+  application:
+    name: payment-service
+
+  data:
+    mongodb:
+      auto-index-creation: false
+  mongodb:
+    uri: ${MONGO_URI:mongodb://localhost:27017/payment_service}
+
+  liquibase:
+    change-log: classpath:db/changelog/master.xml
+
+server:
+  port: ${SERVER_PORT:8084}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
