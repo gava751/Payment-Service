@@ -39,6 +39,26 @@ Indexes (each tied to a known access scenario):
 `user_id` and `order_id` are logical references to other services and have no
 database-level references (cross-service boundary).
 
+## DAO Layer (Task: DAO Layer)
+
+`PaymentEntity` (`@Document("payments")`) maps the schema fields
+(`order_id`, `user_id`, `status`, `timestamp`, `payment_amount` — snake_case
+in the document, camelCase in Java). `id` is a database-generated ObjectId;
+amounts are `BigDecimal` (Decimal128), `timestamp` is `Instant`,
+`status` is the `PaymentStatus` enum (`SUCCESS` / `FAILED`, stored by name).
+
+`PaymentRepository` extends `MongoRepository` plus a custom fragment:
+
+| Method | Purpose |
+|--------|---------|
+| `findPayments(userId, orderId, status)` | payments by any combination of user/order/status (nulls skipped), sorted by timestamp |
+| `sumByUserIdAndTimestampBetween(userId, from, to)` | total amount for one user in an inclusive date range |
+| `sumByTimestampBetween(from, to)` | total amount for all users in an inclusive date range |
+
+The two sum methods use aggregation (`match` + `group` → `$sum`), backed by
+the `idx_payments_user_id_timestamp` / `idx_payments_timestamp` indexes.
+`sum` returns `0` when the range matches no payments.
+
 ## Configuration
 
 All settings are provided via environment variables. Local values live in an
