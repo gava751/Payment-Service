@@ -59,7 +59,39 @@ The two sum methods use aggregation (`match` + `group` → `$sum`), backed by
 the `idx_payments_user_id_timestamp` / `idx_payments_timestamp` indexes.
 `sum` returns `0` when the range matches no payments.
 
-## Configuration
+## Service Layer (Task: Service Layer)
+
+Controller operates DTOs, the DAO layer operates entities; mapping is done by
+MapStruct (`PaymentMapper`).
+
+Endpoints (`/api/payments`):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/payments` | create payment; status comes from an external random-number API (even → SUCCESS, odd → FAILED), 503 if that API is unavailable |
+| GET | `/api/payments?userId=&orderId=&status=` | payments by any combination of user/order/status |
+| GET | `/api/payments/sum?userId=&from=&to=` | total for one user in a date range |
+| GET | `/api/payments/sum/all?from=&to=` | total for all users in a date range |
+
+`CreatePaymentRequest` carries validation annotations (`@NotBlank` ids,
+`@NotNull @Positive` amount); invalid bodies → 400 with field errors.
+`timestamp` is set server-side, `id` is database-generated.
+
+## Kafka (Task: Kafka)
+
+Kafka runs in Docker (KRaft, `apache/kafka:4.0.0`). On every created payment
+the service publishes a `CREATE_PAYMENT` event as JSON (Boot ObjectMapper,
+String payload) to the `payment-events` topic, keyed by `orderId`:
+
+```json
+{"paymentId":"...","orderId":"...","userId":"...","status":"SUCCESS",
+ "timestamp":"...ISO-8601...","paymentAmount":99.99}
+```
+
+Order Service consumes this topic and moves the order status
+(`SUCCESS` → `PAID`, `FAILED` → `CANCELLED`, only from `NEW`).
+
+
 
 All settings are provided via environment variables. Local values live in an
 ignored `.env` (see `.env.example`):
@@ -71,6 +103,11 @@ ignored `.env` (see `.env.example`):
 | `MONGO_USER`     | — (no default, required)                     | Mongo user for docker compose  |
 | `MONGO_PASSWORD` | — (no default, required)                     | Mongo password for compose     |
 | `MONGO_DB`       | — (no default, required)                     | Mongo database for compose     |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092`                    | Kafka brokers                  |
+| `PAYMENT_EVENTS_TOPIC` | `payment-events`                        | CREATE_PAYMENT event topic     |
+| `RANDOM_NUMBER_URL` | random.org integers endpoint               | External random number API     |
+| `RANDOM_NUMBER_CONNECT_TIMEOUT` | `2s`                           | Random API connect timeout     |
+| `RANDOM_NUMBER_READ_TIMEOUT` | `5s`                              | Random API read timeout        |
 
 ## Running locally
 
