@@ -68,13 +68,15 @@ Endpoints (`/api/payments`):
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/payments` | create payment; status comes from an external random-number API (even → SUCCESS, odd → FAILED), 503 if that API is unavailable |
+| POST | `/api/payments` | create payment; `userId` is resolved from `userEmail` via User Service (`/internal/users/by-email`, 404 unknown user, 503 down), status comes from an external random-number API (even → SUCCESS, odd → FAILED, 503 if that API is unavailable) |
 | GET | `/api/payments?userId=&orderId=&status=` | payments by any combination of user/order/status |
 | GET | `/api/payments/sum?userId=&from=&to=` | total for one user in a date range |
 | GET | `/api/payments/sum/all?from=&to=` | total for all users in a date range |
 
-`CreatePaymentRequest` carries validation annotations (`@NotBlank` ids,
-`@NotNull @Positive` amount); invalid bodies → 400 with field errors.
+`CreatePaymentRequest` carries validation annotations (`@NotBlank @Email` user
+email, `@NotBlank` orderId, `@NotNull @Positive` amount); invalid bodies → 400
+with field errors. The client never supplies `userId` — it is resolved
+server-side from User Service (rule: owner id is not client-chosen).
 `timestamp` is set server-side, `id` is database-generated.
 
 ## Kafka (Task: Kafka)
@@ -103,6 +105,10 @@ ignored `.env` (see `.env.example`):
 | `MONGO_USER`     | — (no default, required)                     | Mongo user for docker compose  |
 | `MONGO_PASSWORD` | — (no default, required)                     | Mongo password for compose     |
 | `MONGO_DB`       | — (no default, required)                     | Mongo database for compose     |
+| `USER_SERVICE_URL` | `http://localhost:8082`                    | User Service base URL (email → id) |
+| `USER_SERVICE_CONNECT_TIMEOUT` | `2s`                           | User Service connect timeout   |
+| `USER_SERVICE_READ_TIMEOUT` | `5s`                              | User Service read timeout      |
+| `INTERNAL_SERVICE_TOKEN` | — (no default, required)            | Shared internal token, must match User Service |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092`                    | Kafka brokers                  |
 | `PAYMENT_EVENTS_TOPIC` | `payment-events`                        | CREATE_PAYMENT event topic     |
 | `RANDOM_NUMBER_URL` | random.org integers endpoint               | External random number API     |

@@ -10,6 +10,7 @@ import org.mapstruct.Mapping;
 public interface PaymentMapper {
 
     @Mapping(target = "id", ignore = true)
+    @Mapping(target = "userId", ignore = true)
     @Mapping(target = "status", ignore = true)
     @Mapping(target = "timestamp", ignore = true)
     PaymentEntity toEntity(CreatePaymentRequest request);

@@ -48,14 +48,14 @@ class PaymentKafkaIntegrationTest extends IntegrationTestBase {
         when(randomNumberClient.getRandomNumber()).thenReturn(42);
 
         paymentService.createPayment(
-                new CreatePaymentRequest("order-kafka-1", "user-kafka", new BigDecimal("99.99")));
+                new CreatePaymentRequest("order-kafka-1", "user-kafka@example.com", new BigDecimal("99.99")));
 
         List<String> events = consumeEvents(PAYMENT_EVENTS_TOPIC, 1, Duration.ofSeconds(45));
 
         assertThat(events).hasSize(1);
         assertThat(events.getFirst())
                 .contains("\"orderId\":\"order-kafka-1\"")
-                .contains("\"userId\":\"user-kafka\"")
+                .contains("\"userId\":\"1\"")
                 .contains("\"status\":\"SUCCESS\"");
     }
 

@@ -1,10 +1,12 @@
 package com.innoboard.paymentservice.service;
 
 import com.innoboard.paymentservice.client.RandomNumberClient;
+import com.innoboard.paymentservice.client.UserClient;
 import com.innoboard.paymentservice.domain.PaymentEntity;
 import com.innoboard.paymentservice.domain.PaymentStatus;
 import com.innoboard.paymentservice.dto.CreatePaymentRequest;
 import com.innoboard.paymentservice.dto.PaymentResponse;
+import com.innoboard.paymentservice.dto.UserInfoResponse;
 import com.innoboard.paymentservice.event.CreatePaymentEvent;
 import com.innoboard.paymentservice.mapper.PaymentMapper;
 import com.innoboard.paymentservice.repository.PaymentRepository;
@@ -17,9 +19,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.web.server.ResponseStatusException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -38,6 +42,8 @@ class PaymentServiceImplTest {
     private static final String PAYMENT_EVENTS_TOPIC = "payment-events";
     private static final Instant FROM = Instant.parse("2026-01-01T00:00:00Z");
     private static final Instant TO = Instant.parse("2026-02-01T00:00:00Z");
+    private static final UserInfoResponse USER = new UserInfoResponse(
+            1L, "Ivan", "Ivanov", LocalDate.parse("1990-05-10"), "ivan@example.com", true);
 
     @Mock
     private PaymentRepository paymentRepository;
@@ -49,6 +55,9 @@ class PaymentServiceImplTest {
     private RandomNumberClient randomNumberClient;
 
     @Mock
+    private UserClient userClient;
+
+    @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
 
     private PaymentServiceImpl paymentService;
@@ -56,19 +65,22 @@ class PaymentServiceImplTest {
     @BeforeEach
     void setUp() {
         paymentService = new PaymentServiceImpl(paymentRepository, paymentMapper, randomNumberClient,
-                kafkaTemplate, new tools.jackson.databind.ObjectMapper(), PAYMENT_EVENTS_TOPIC);
+                userClient, kafkaTemplate, new ObjectMapper(), PAYMENT_EVENTS_TOPIC);
     }
 
     private CreatePaymentRequest request() {
-        return new CreatePaymentRequest("order-1", "user-1", new BigDecimal("100.50"));
+        return new CreatePaymentRequest("order-1", "ivan@example.com", new BigDecimal("100.50"));
     }
 
     private PaymentEntity entity(CreatePaymentRequest request) {
         return PaymentEntity.builder()
                 .orderId(request.orderId())
-                .userId(request.userId())
                 .paymentAmount(request.paymentAmount())
                 .build();
+    }
+
+    private void stubResolvedUser() {
+        when(userClient.getUserByEmail("ivan@example.com")).thenReturn(USER);
     }
 
     private void stubResponses() {
@@ -79,19 +91,25 @@ class PaymentServiceImplTest {
         });
     }
 
+    private void stubProducer() {
+        when(kafkaTemplate.send(anyString(), anyString(), any(String.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+    }
+
     @Test
-    void createPaymentWithEvenNumberSetsSuccessStatusAndPublishesEvent() {
+    void createPaymentResolvesUserIdFromUserClientAndSetsSuccessStatus() {
         CreatePaymentRequest request = request();
+        stubResolvedUser();
         when(randomNumberClient.getRandomNumber()).thenReturn(42);
         when(paymentMapper.toEntity(request)).thenReturn(entity(request));
         when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(kafkaTemplate.send(anyString(), anyString(), any(String.class)))
-                .thenReturn(CompletableFuture.completedFuture(null));
+        stubProducer();
         stubResponses();
 
         PaymentResponse response = paymentService.createPayment(request);
 
         assertThat(response.status()).isEqualTo(PaymentStatus.SUCCESS);
+        assertThat(response.userId()).isEqualTo("1");
         assertThat(response.timestamp()).isNotNull();
         verify(paymentRepository).save(any(PaymentEntity.class));
     }
@@ -99,11 +117,11 @@ class PaymentServiceImplTest {
     @Test
     void createPaymentWithOddNumberSetsFailedStatus() {
         CreatePaymentRequest request = request();
+        stubResolvedUser();
         when(randomNumberClient.getRandomNumber()).thenReturn(7);
         when(paymentMapper.toEntity(request)).thenReturn(entity(request));
         when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(kafkaTemplate.send(anyString(), anyString(), any(String.class)))
-                .thenReturn(CompletableFuture.completedFuture(null));
+        stubProducer();
         stubResponses();
 
         PaymentResponse response = paymentService.createPayment(request);
@@ -112,36 +130,54 @@ class PaymentServiceImplTest {
     }
 
     @Test
-    void createPaymentPublishesEventWithOrderIdKeyAndStatus() {
+    void createPaymentPublishesEventWithResolvedUserIdAndOrderIdKey() {
         CreatePaymentRequest request = request();
+        stubResolvedUser();
         when(randomNumberClient.getRandomNumber()).thenReturn(42);
         when(paymentMapper.toEntity(request)).thenReturn(entity(request));
         when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        when(kafkaTemplate.send(anyString(), anyString(), any(String.class)))
-                .thenReturn(CompletableFuture.completedFuture(null));
+        stubProducer();
 
         paymentService.createPayment(request);
 
         ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
         verify(kafkaTemplate).send(eq(PAYMENT_EVENTS_TOPIC), eq("order-1"), payloadCaptor.capture());
-        CreatePaymentEvent event = new tools.jackson.databind.ObjectMapper().readValue(
+        CreatePaymentEvent event = new ObjectMapper().readValue(
                 payloadCaptor.getValue(), CreatePaymentEvent.class);
         assertThat(event.orderId()).isEqualTo("order-1");
-        assertThat(event.userId()).isEqualTo("user-1");
+        assertThat(event.userId()).isEqualTo("1");
         assertThat(event.status()).isEqualTo(PaymentStatus.SUCCESS);
         assertThat(event.timestamp()).isNotNull();
         assertThat(event.paymentAmount()).isEqualByComparingTo("100.50");
     }
 
     @Test
-    void getPaymentsDelegatesToRepositoryAndMapsResponses() {
-        PaymentEntity entity = entity(request());
-        entity.setStatus(PaymentStatus.SUCCESS);
-        entity.setTimestamp(Instant.now());
-        when(paymentRepository.findPayments("user-1", "order-1", PaymentStatus.SUCCESS)).thenReturn(List.of(entity));
+    void createPaymentDoesNotFailWhenEventSendFails() {
+        CreatePaymentRequest request = request();
+        stubResolvedUser();
+        when(randomNumberClient.getRandomNumber()).thenReturn(42);
+        when(paymentMapper.toEntity(request)).thenReturn(entity(request));
+        when(paymentRepository.save(any(PaymentEntity.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(kafkaTemplate.send(anyString(), anyString(), any(String.class)))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("broker down")));
         stubResponses();
 
-        List<PaymentResponse> result = paymentService.getPayments("user-1", "order-1", PaymentStatus.SUCCESS);
+        PaymentResponse response = paymentService.createPayment(request);
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.SUCCESS);
+        verify(kafkaTemplate).send(eq(PAYMENT_EVENTS_TOPIC), anyString(), anyString());
+    }
+
+    @Test
+    void getPaymentsDelegatesToRepositoryAndMapsResponses() {
+        PaymentEntity entity = entity(request());
+        entity.setUserId("1");
+        entity.setStatus(PaymentStatus.SUCCESS);
+        entity.setTimestamp(Instant.now());
+        when(paymentRepository.findPayments("1", "order-1", PaymentStatus.SUCCESS)).thenReturn(List.of(entity));
+        stubResponses();
+
+        List<PaymentResponse> result = paymentService.getPayments("1", "order-1", PaymentStatus.SUCCESS);
 
         assertThat(result).hasSize(1);
         assertThat(result.getFirst().orderId()).isEqualTo("order-1");
@@ -149,11 +185,20 @@ class PaymentServiceImplTest {
     }
 
     @Test
+    void getPaymentsWithoutMatchesReturnsEmptyList() {
+        when(paymentRepository.findPayments("user-x", null, null)).thenReturn(List.of());
+
+        List<PaymentResponse> result = paymentService.getPayments("user-x", null, null);
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     void sumByUserDelegatesToRepository() {
-        when(paymentRepository.sumByUserIdAndTimestampBetween("user-1", FROM, TO))
+        when(paymentRepository.sumByUserIdAndTimestampBetween("1", FROM, TO))
                 .thenReturn(new BigDecimal("300.00"));
 
-        BigDecimal sum = paymentService.sumByUser("user-1", FROM, TO);
+        BigDecimal sum = paymentService.sumByUser("1", FROM, TO);
 
         assertThat(sum).isEqualByComparingTo("300.00");
     }
@@ -169,7 +214,7 @@ class PaymentServiceImplTest {
 
     @Test
     void sumByUserRejectsReversedRange() {
-        assertThatThrownBy(() -> paymentService.sumByUser("user-1", TO, FROM))
+        assertThatThrownBy(() -> paymentService.sumByUser("1", TO, FROM))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode().value()).isEqualTo(400));
 

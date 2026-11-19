@@ -22,6 +22,21 @@ import java.util.stream.Collectors;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(UserNotFoundException.class)
+    ResponseEntity<ErrorResponse> handleUserNotFound(UserNotFoundException ex, HttpServletRequest request) {
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(HttpStatus.NOT_FOUND, ex.getMessage(), request.getRequestURI()));
+    }
+
+    @ExceptionHandler(UserServiceUnavailableException.class)
+    ResponseEntity<ErrorResponse> handleUserServiceUnavailable(UserServiceUnavailableException ex,
+                                                              HttpServletRequest request) {
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ErrorResponse.of(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request.getRequestURI()));
+    }
+
     @ExceptionHandler(RandomNumberServiceUnavailableException.class)
     ResponseEntity<ErrorResponse> handleRandomNumberUnavailable(RandomNumberServiceUnavailableException ex,
                                                                 HttpServletRequest request) {
