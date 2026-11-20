@@ -64,7 +64,7 @@ class PaymentApiIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    void createPaymentReturns201WithRandomEvenStatusAndSavesDocument() throws Exception {
+    void createPaymentReturnsInProgressThenFinalizesAsynchronously() throws Exception {
         stubNumber("42");
 
         mockMvc.perform(post("/api/payments")
@@ -76,18 +76,21 @@ class PaymentApiIntegrationTest extends IntegrationTestBase {
                 .andExpect(jsonPath("$.id").isNotEmpty())
                 .andExpect(jsonPath("$.orderId").value("order-it-1"))
                 .andExpect(jsonPath("$.userId").value("1"))
-                .andExpect(jsonPath("$.status").value("SUCCESS"))
+                .andExpect(jsonPath("$.status").value("IN_PROGRESS"))
                 .andExpect(jsonPath("$.timestamp").isNotEmpty())
                 .andExpect(jsonPath("$.paymentAmount").value(149.99));
 
+        await().atMost(java.time.Duration.ofSeconds(30)).pollInterval(java.time.Duration.ofMillis(500))
+                .until(() -> paymentRepository.findPayments("1", null, null).stream()
+                        .anyMatch(p -> p.getStatus() == PaymentStatus.SUCCESS));
+
         List<PaymentEntity> stored = paymentRepository.findPayments("1", null, null);
         assertThat(stored).hasSize(1);
-        assertThat(stored.getFirst().getStatus()).isEqualTo(PaymentStatus.SUCCESS);
         assertThat(stored.getFirst().getPaymentAmount()).isEqualByComparingTo("149.99");
     }
 
     @Test
-    void createPaymentPublishesEventToKafkaTopic() throws Exception {
+    void createPaymentPublishesInProgressAndFinalEventsToKafka() throws Exception {
         stubNumber("7");
 
         mockMvc.perform(post("/api/payments")
@@ -96,9 +99,13 @@ class PaymentApiIntegrationTest extends IntegrationTestBase {
                                 {"orderId":"order-it-2","userEmail":"user-it@example.com","paymentAmount":10.00}
                                 """))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("FAILED"));
+                .andExpect(jsonPath("$.status").value("IN_PROGRESS"));
 
         List<String> events = consumeEvents();
+        assertThat(events).anySatisfy(event -> {
+            assertThat(event).contains("\"orderId\":\"order-it-2\"");
+            assertThat(event).contains("\"status\":\"IN_PROGRESS\"");
+        });
         assertThat(events).anySatisfy(event -> {
             assertThat(event).contains("\"orderId\":\"order-it-2\"");
             assertThat(event).contains("\"status\":\"FAILED\"");
@@ -106,7 +113,7 @@ class PaymentApiIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    void createPaymentReturns503WhenRandomApiIsDown() throws Exception {
+    void createPaymentStaysInProgressWhenRandomApiIsDown() throws Exception {
         stubFailure(500, "boom");
 
         mockMvc.perform(post("/api/payments")
@@ -114,11 +121,16 @@ class PaymentApiIntegrationTest extends IntegrationTestBase {
                         .content("""
                                 {"orderId":"order-it-3","userEmail":"user-it@example.com","paymentAmount":5.00}
                                 """))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.status").value(503))
-                .andExpect(jsonPath("$.message").value("Random number service is unavailable"));
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("IN_PROGRESS"));
 
-        assertThat(paymentRepository.findPayments("1", null, null)).isEmpty();
+        await().during(java.time.Duration.ofSeconds(3)).atMost(java.time.Duration.ofSeconds(6))
+                .until(() -> paymentRepository.findPayments("1", null, null).stream()
+                        .allMatch(p -> p.getStatus() == PaymentStatus.IN_PROGRESS));
+
+        List<PaymentEntity> stored = paymentRepository.findPayments("1", null, null);
+        assertThat(stored).hasSize(1);
+        assertThat(stored.getFirst().getStatus()).isEqualTo(PaymentStatus.IN_PROGRESS);
     }
 
     @Test
@@ -301,7 +313,8 @@ class PaymentApiIntegrationTest extends IntegrationTestBase {
                 for (ConsumerRecord<String, String> record : consumer.poll(Duration.ofMillis(500)).records(PAYMENT_EVENTS_TOPIC)) {
                     values.add(record.value());
                 }
-                return values.stream().anyMatch(event -> event.contains("\"orderId\":\"order-it-2\""));
+                return values.stream().anyMatch(event -> event.contains("\"orderId\":\"order-it-2\"")
+                        && event.contains("\"status\":\"FAILED\""));
             };
             await()
                     .atMost(Duration.ofSeconds(45))

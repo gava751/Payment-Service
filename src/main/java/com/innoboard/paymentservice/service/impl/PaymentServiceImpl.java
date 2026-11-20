@@ -1,64 +1,52 @@
 package com.innoboard.paymentservice.service.impl;
 
-import com.innoboard.paymentservice.client.RandomNumberClient;
 import com.innoboard.paymentservice.client.UserClient;
 import com.innoboard.paymentservice.domain.PaymentEntity;
 import com.innoboard.paymentservice.domain.PaymentStatus;
 import com.innoboard.paymentservice.dto.CreatePaymentRequest;
 import com.innoboard.paymentservice.dto.PaymentResponse;
 import com.innoboard.paymentservice.dto.UserInfoResponse;
-import com.innoboard.paymentservice.event.CreatePaymentEvent;
+import com.innoboard.paymentservice.event.PaymentEventPublisher;
 import com.innoboard.paymentservice.mapper.PaymentMapper;
 import com.innoboard.paymentservice.repository.PaymentRepository;
 import com.innoboard.paymentservice.service.PaymentService;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
-import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
 @Service
-@Slf4j
 public class PaymentServiceImpl implements PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final PaymentMapper paymentMapper;
-    private final RandomNumberClient randomNumberClient;
     private final UserClient userClient;
-    private final KafkaTemplate<String, String> kafkaTemplate;
-    private final ObjectMapper objectMapper;
-    private final String paymentEventsTopic;
+    private final PaymentEventPublisher paymentEventPublisher;
+    private final PaymentFinalizationProcessor finalizationProcessor;
 
     public PaymentServiceImpl(PaymentRepository paymentRepository, PaymentMapper paymentMapper,
-                              RandomNumberClient randomNumberClient, UserClient userClient,
-                              KafkaTemplate<String, String> kafkaTemplate,
-                              ObjectMapper objectMapper,
-                              @Value("${app.kafka.topics.payment-events}") String paymentEventsTopic) {
+                              UserClient userClient, PaymentEventPublisher paymentEventPublisher,
+                              PaymentFinalizationProcessor finalizationProcessor) {
         this.paymentRepository = paymentRepository;
         this.paymentMapper = paymentMapper;
-        this.randomNumberClient = randomNumberClient;
         this.userClient = userClient;
-        this.kafkaTemplate = kafkaTemplate;
-        this.objectMapper = objectMapper;
-        this.paymentEventsTopic = paymentEventsTopic;
+        this.paymentEventPublisher = paymentEventPublisher;
+        this.finalizationProcessor = finalizationProcessor;
     }
 
     @Override
     public PaymentResponse createPayment(CreatePaymentRequest request) {
         UserInfoResponse user = userClient.getUserByEmail(request.userEmail());
-        int randomNumber = randomNumberClient.getRandomNumber();
         PaymentEntity payment = paymentMapper.toEntity(request);
         payment.setUserId(String.valueOf(user.id()));
-        payment.setStatus(resolveStatus(randomNumber));
+        payment.setStatus(PaymentStatus.IN_PROGRESS);
         payment.setTimestamp(Instant.now());
         paymentRepository.save(payment);
-        publishCreatePaymentEvent(payment);
+        paymentEventPublisher.publish(payment);
+        finalizationProcessor.finalizePayment(payment.getId());
         return paymentMapper.toResponse(payment);
     }
 
@@ -79,27 +67,6 @@ public class PaymentServiceImpl implements PaymentService {
     public BigDecimal sumAllUsers(Instant from, Instant to) {
         validateRange(from, to);
         return paymentRepository.sumByTimestampBetween(from, to);
-    }
-
-    private void publishCreatePaymentEvent(PaymentEntity payment) {
-        CreatePaymentEvent event = new CreatePaymentEvent(
-                payment.getId(), payment.getOrderId(), payment.getUserId(),
-                payment.getStatus(), payment.getTimestamp(), payment.getPaymentAmount());
-        String payload = objectMapper.writeValueAsString(event);
-        kafkaTemplate.send(paymentEventsTopic, event.orderId(), payload)
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("Failed to send CreatePaymentEvent for payment {} to order {}: {}",
-                                event.paymentId(), event.orderId(), ex.getMessage());
-                    } else {
-                        log.info("CreatePaymentEvent sent for payment {} to order {}",
-                                event.paymentId(), event.orderId());
-                    }
-                });
-    }
-
-    private PaymentStatus resolveStatus(int randomNumber) {
-        return randomNumber % 2 == 0 ? PaymentStatus.SUCCESS : PaymentStatus.FAILED;
     }
 
     private void validateRange(Instant from, Instant to) {

@@ -37,14 +37,6 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponse.of(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request.getRequestURI()));
     }
 
-    @ExceptionHandler(RandomNumberServiceUnavailableException.class)
-    ResponseEntity<ErrorResponse> handleRandomNumberUnavailable(RandomNumberServiceUnavailableException ex,
-                                                                HttpServletRequest request) {
-        return ResponseEntity
-                .status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ErrorResponse.of(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request.getRequestURI()));
-    }
-
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException ex,
                                                               HttpServletRequest request) {

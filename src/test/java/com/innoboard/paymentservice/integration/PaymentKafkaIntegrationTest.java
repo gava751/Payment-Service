@@ -50,13 +50,17 @@ class PaymentKafkaIntegrationTest extends IntegrationTestBase {
         paymentService.createPayment(
                 new CreatePaymentRequest("order-kafka-1", "user-kafka@example.com", new BigDecimal("99.99")));
 
-        List<String> events = consumeEvents(PAYMENT_EVENTS_TOPIC, 1, Duration.ofSeconds(45));
+        List<String> events = consumeEvents(PAYMENT_EVENTS_TOPIC, 2, Duration.ofSeconds(45));
 
-        assertThat(events).hasSize(1);
-        assertThat(events.getFirst())
-                .contains("\"orderId\":\"order-kafka-1\"")
-                .contains("\"userId\":\"1\"")
-                .contains("\"status\":\"SUCCESS\"");
+        assertThat(events).anySatisfy(event -> {
+            assertThat(event).contains("\"orderId\":\"order-kafka-1\"");
+            assertThat(event).contains("\"status\":\"IN_PROGRESS\"");
+        });
+        assertThat(events).anySatisfy(event -> {
+            assertThat(event).contains("\"orderId\":\"order-kafka-1\"");
+            assertThat(event).contains("\"userId\":\"1\"");
+            assertThat(event).contains("\"status\":\"SUCCESS\"");
+        });
     }
 
     private List<String> consumeEvents(String topic, int expectedCount, Duration maxWait) {

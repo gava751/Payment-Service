@@ -68,7 +68,7 @@ Endpoints (`/api/payments`):
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/payments` | create payment; `userId` is resolved from `userEmail` via User Service (`/internal/users/by-email`, 404 unknown user, 503 down), status comes from an external random-number API (even → SUCCESS, odd → FAILED, 503 if that API is unavailable) |
+| POST | `/api/payments` | create payment: `userId` is resolved from `userEmail` via User Service (`/internal/users/by-email`, 404 unknown user, 503 down); the payment is stored as `IN_PROGRESS` and finalized asynchronously by the random-number API (even → SUCCESS, odd → FAILED). If that API is unavailable the payment stays `IN_PROGRESS` |
 | GET | `/api/payments?userId=&orderId=&status=` | payments by any combination of user/order/status |
 | GET | `/api/payments/sum?userId=&from=&to=` | total for one user in a date range |
 | GET | `/api/payments/sum/all?from=&to=` | total for all users in a date range |
@@ -79,11 +79,18 @@ with field errors. The client never supplies `userId` — it is resolved
 server-side from User Service (rule: owner id is not client-chosen).
 `timestamp` is set server-side, `id` is database-generated.
 
+Payment lifecycle: `IN_PROGRESS` → `SUCCESS` / `FAILED`. Creation stores the
+`IN_PROGRESS` document and returns 201 immediately; `PaymentFinalizationProcessor`
+(`@Async`) calls the random-number API afterwards and completes the payment.
+Failed finalization attempts leave the payment `IN_PROGRESS`. Date-range sums
+aggregate payment records of every status.
+
 ## Kafka (Task: Kafka)
 
-Kafka runs in Docker (KRaft, `apache/kafka:4.0.0`). On every created payment
-the service publishes a `CREATE_PAYMENT` event as JSON (Boot ObjectMapper,
-String payload) to the `payment-events` topic, keyed by `orderId`:
+Kafka runs in Docker (KRaft, `apache/kafka:4.0.0`). The service publishes a
+`CREATE_PAYMENT` event as JSON (Boot ObjectMapper, String payload) to the
+`payment-events` topic, keyed by `orderId` — once when the payment is created
+(`IN_PROGRESS`) and once when it is finalized (`SUCCESS` / `FAILED`):
 
 ```json
 {"paymentId":"...","orderId":"...","userId":"...","status":"SUCCESS",
@@ -91,7 +98,8 @@ String payload) to the `payment-events` topic, keyed by `orderId`:
 ```
 
 Order Service consumes this topic and moves the order status
-(`SUCCESS` → `PAID`, `FAILED` → `CANCELLED`, only from `NEW`).
+(`SUCCESS` → `PAID`, `FAILED` → `CANCELLED`, only from `NEW`; `IN_PROGRESS`
+events are skipped).
 
 
 
