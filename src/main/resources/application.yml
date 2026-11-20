@@ -14,8 +14,33 @@ spring:
   liquibase:
     change-log: classpath:db/changelog/master.xml
 
+  cloud:
+    circuitbreaker:
+      resilience4j:
+        disable-time-limiter: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
 server:
   port: ${SERVER_PORT:8084}
+
+app:
+  internal:
+    token: ${INTERNAL_SERVICE_TOKEN}
+  services:
+    user-url: ${USER_SERVICE_URL:http://localhost:8082}
+    user-connect-timeout: ${USER_SERVICE_CONNECT_TIMEOUT:2s}
+    user-read-timeout: ${USER_SERVICE_READ_TIMEOUT:5s}
+    random-number-url: ${RANDOM_NUMBER_URL:https://www.random.org/integers/?num=1&min=0&max=1000&col=1&base=10&format=plain&rnd=new}
+    connect-timeout: ${RANDOM_NUMBER_CONNECT_TIMEOUT:2s}
+    read-timeout: ${RANDOM_NUMBER_READ_TIMEOUT:5s}
+  kafka:
+    topics:
+      payment-events: ${PAYMENT_EVENTS_TOPIC:payment-events}
 
 management:
   endpoints:
@@ -26,3 +51,6 @@ management:
     health:
       probes:
         enabled: true
+  health:
+    circuitbreakers:
+      enabled: true

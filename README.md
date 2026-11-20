@@ -39,7 +39,69 @@ Indexes (each tied to a known access scenario):
 `user_id` and `order_id` are logical references to other services and have no
 database-level references (cross-service boundary).
 
-## Configuration
+## DAO Layer (Task: DAO Layer)
+
+`PaymentEntity` (`@Document("payments")`) maps the schema fields
+(`order_id`, `user_id`, `status`, `timestamp`, `payment_amount` — snake_case
+in the document, camelCase in Java). `id` is a database-generated ObjectId;
+amounts are `BigDecimal` (Decimal128), `timestamp` is `Instant`,
+`status` is the `PaymentStatus` enum (`SUCCESS` / `FAILED`, stored by name).
+
+`PaymentRepository` extends `MongoRepository` plus a custom fragment:
+
+| Method | Purpose |
+|--------|---------|
+| `findPayments(userId, orderId, status)` | payments by any combination of user/order/status (nulls skipped), sorted by timestamp |
+| `sumByUserIdAndTimestampBetween(userId, from, to)` | total amount for one user in an inclusive date range |
+| `sumByTimestampBetween(from, to)` | total amount for all users in an inclusive date range |
+
+The two sum methods use aggregation (`match` + `group` → `$sum`), backed by
+the `idx_payments_user_id_timestamp` / `idx_payments_timestamp` indexes.
+`sum` returns `0` when the range matches no payments.
+
+## Service Layer (Task: Service Layer)
+
+Controller operates DTOs, the DAO layer operates entities; mapping is done by
+MapStruct (`PaymentMapper`).
+
+Endpoints (`/api/payments`):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/payments` | create payment: `userId` is resolved from `userEmail` via User Service (`/internal/users/by-email`, 404 unknown user, 503 down); the payment is stored as `IN_PROGRESS` and finalized asynchronously by the random-number API (even → SUCCESS, odd → FAILED). If that API is unavailable the payment stays `IN_PROGRESS` |
+| GET | `/api/payments?userId=&orderId=&status=` | payments by any combination of user/order/status |
+| GET | `/api/payments/sum?userId=&from=&to=` | total for one user in a date range |
+| GET | `/api/payments/sum/all?from=&to=` | total for all users in a date range |
+
+`CreatePaymentRequest` carries validation annotations (`@NotBlank @Email` user
+email, `@NotBlank` orderId, `@NotNull @Positive` amount); invalid bodies → 400
+with field errors. The client never supplies `userId` — it is resolved
+server-side from User Service (rule: owner id is not client-chosen).
+`timestamp` is set server-side, `id` is database-generated.
+
+Payment lifecycle: `IN_PROGRESS` → `SUCCESS` / `FAILED`. Creation stores the
+`IN_PROGRESS` document and returns 201 immediately; `PaymentFinalizationProcessor`
+(`@Async`) calls the random-number API afterwards and completes the payment.
+Failed finalization attempts leave the payment `IN_PROGRESS`. Date-range sums
+aggregate payment records of every status.
+
+## Kafka (Task: Kafka)
+
+Kafka runs in Docker (KRaft, `apache/kafka:4.0.0`). The service publishes a
+`CREATE_PAYMENT` event as JSON (Boot ObjectMapper, String payload) to the
+`payment-events` topic, keyed by `orderId` — once when the payment is created
+(`IN_PROGRESS`) and once when it is finalized (`SUCCESS` / `FAILED`):
+
+```json
+{"paymentId":"...","orderId":"...","userId":"...","status":"SUCCESS",
+ "timestamp":"...ISO-8601...","paymentAmount":99.99}
+```
+
+Order Service consumes this topic and moves the order status
+(`SUCCESS` → `PAID`, `FAILED` → `CANCELLED`, only from `NEW`; `IN_PROGRESS`
+events are skipped).
+
+
 
 All settings are provided via environment variables. Local values live in an
 ignored `.env` (see `.env.example`):
@@ -51,6 +113,15 @@ ignored `.env` (see `.env.example`):
 | `MONGO_USER`     | — (no default, required)                     | Mongo user for docker compose  |
 | `MONGO_PASSWORD` | — (no default, required)                     | Mongo password for compose     |
 | `MONGO_DB`       | — (no default, required)                     | Mongo database for compose     |
+| `USER_SERVICE_URL` | `http://localhost:8082`                    | User Service base URL (email → id) |
+| `USER_SERVICE_CONNECT_TIMEOUT` | `2s`                           | User Service connect timeout   |
+| `USER_SERVICE_READ_TIMEOUT` | `5s`                              | User Service read timeout      |
+| `INTERNAL_SERVICE_TOKEN` | — (no default, required)            | Shared internal token, must match User Service |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092`                    | Kafka brokers                  |
+| `PAYMENT_EVENTS_TOPIC` | `payment-events`                        | CREATE_PAYMENT event topic     |
+| `RANDOM_NUMBER_URL` | random.org integers endpoint               | External random number API     |
+| `RANDOM_NUMBER_CONNECT_TIMEOUT` | `2s`                           | Random API connect timeout     |
+| `RANDOM_NUMBER_READ_TIMEOUT` | `5s`                              | Random API read timeout        |
 
 ## Running locally
 
